@@ -7,7 +7,19 @@ import {
   signOut,
   onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/11.10.0/firebase-auth.js";
+import {
+  getFirestore,
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+  addDoc,
+  updateDoc
+} from "https://www.gstatic.com/firebasejs/11.10.0/firebase-firestore.js";
 import { firebaseConfig } from "./firebase-config.js";
+
 
 const $ = (id) => document.getElementById(id);
 
@@ -20,7 +32,7 @@ const passTypes = [
   { id: "monthly", name: "30-Day Pass", description: "A 30-day demo pass.", price: 45, duration: "30 days", days: 30, icon: "✦" }
 ];
 
-let app, auth;
+let app, auth, db;
 let currentUser = null;
 let authMode = "login";
 let ownedPasses = [];
@@ -303,10 +315,30 @@ async function loadDashboard() {
   if (!currentUser) return;
 
   const state = loadDemoState();
-  ownedPasses = state.passes;
-  transactions = state.transactions;
-
   updateBalance(state.balance);
+
+  const passSnap = await getDocs(
+    query(
+      collection(db, "passes"),
+      where("ownerUid", "==", currentUser.uid)
+    )
+  );
+
+  ownedPasses = passSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => b.createdAt - a.createdAt);
+
+  const txSnap = await getDocs(
+    query(
+      collection(db, "transactions"),
+      where("uid", "==", currentUser.uid)
+    )
+  );
+
+  transactions = txSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => b.createdAt - a.createdAt);
+
   renderOwnedPasses();
   renderTransactions();
   updateResetClock();
@@ -315,7 +347,7 @@ async function loadDashboard() {
 async function buyPass(typeId) {
   if (!currentUser) return;
 
-  const type = passTypes.find(item => item.id === typeId);
+  const type = passTypes.find(p => p.id === typeId);
   if (!type) return;
 
   const button = document.querySelector(`[data-buy="${typeId}"]`);
@@ -325,34 +357,44 @@ async function buyPass(typeId) {
     const state = loadDemoState();
 
     if (state.balance < type.price) {
-      toast("Not enough demo balance for this pass.");
+      toast("Not enough demo balance.");
       return;
     }
 
-    const now = new Date();
+    const now = Date.now();
+
     const pass = {
-      id: makeId(),
       type: type.id,
       ownerUid: currentUser.uid,
-      createdAt: now.toISOString(),
+      createdAt: now,
       lastUsedAt: null,
       status: "active",
       expiresAt: type.days
-        ? new Date(now.getTime() + type.days * 86400000).toISOString()
+        ? now + type.days * 24 * 60 * 60 * 1000
         : null
     };
 
-    state.balance = Math.round((state.balance - type.price) * 100) / 100;
-    state.passes.unshift(pass);
+    const ref = await addDoc(collection(db, "passes"), pass);
 
-    addTransaction(state, "purchase", `${type.name} purchased`, type.price);
+    state.balance = Math.round(
+      (state.balance - type.price) * 100
+    ) / 100;
+
     saveDemoState(state);
+
+    await addDoc(collection(db, "transactions"), {
+      uid: currentUser.uid,
+      type: "purchase",
+      description: `${type.name} purchased`,
+      amount: type.price,
+      createdAt: now
+    });
 
     await loadDashboard();
     toast(`${type.name} purchased for ${dollars(type.price)}.`);
   } catch (error) {
     console.error(error);
-    toast("Could not save demo data. Check browser storage settings.");
+    toast("Purchase failed. Check Firestore rules and connection.");
   } finally {
     if (button) button.disabled = false;
   }
@@ -406,11 +448,11 @@ async function validatePayload(raw) {
     payload = JSON.parse(raw);
   } catch {
     showValidation(false, "Invalid QR payload",
-      "This code is not a valid Theta Transit demo pass.");
+      "This is not a valid Theta Transit QR code.");
     return;
   }
 
-  if (typeof payload.passId !== "string" || !payload.passId) {
+  if (!payload.passId || typeof payload.passId !== "string") {
     showValidation(false, "Pass ID missing",
       "The QR code does not contain a pass ID.");
     return;
@@ -418,55 +460,76 @@ async function validatePayload(raw) {
 
   if (!currentUser) {
     showValidation(false, "Sign-in required",
-      "Sign in to validate your demo passes.");
+      "Sign in to validate demo passes.");
     return;
   }
 
-  const state = loadDemoState();
-  const pass = state.passes.find(item => item.id === payload.passId);
+  try {
+    const ref = doc(db, "passes", payload.passId);
+    const snap = await getDoc(ref);
 
-  if (!pass) {
-    showValidation(false, "PASS REJECTED",
-      "This pass is not present in this browser's demo account.");
-    return;
-  }
-
-  if (pass.expiresAt && Date.now() >= new Date(pass.expiresAt).getTime()) {
-    showValidation(false, "PASS EXPIRED", "This demo pass has expired.");
-    return;
-  }
-
-  if (pass.type === "single" && pass.lastUsedAt) {
-    showValidation(false, "PASS ALREADY USED",
-      "A Single Ride pass can only be accepted once.");
-    return;
-  }
-
-  if (pass.lastUsedAt) {
-    const elapsed = Date.now() - new Date(pass.lastUsedAt).getTime();
-    const remaining = COOLDOWN_MS - elapsed;
-
-    if (remaining > 0) {
-      showValidation(false, "COOLDOWN ACTIVE",
-        "This pass was scanned recently.", remaining);
+    if (!snap.exists()) {
+      showValidation(false, "PASS REJECTED",
+        "This pass does not exist.");
       return;
     }
+
+    const pass = snap.data();
+
+    if (pass.ownerUid !== currentUser.uid) {
+      showValidation(false, "PASS REJECTED",
+        "This pass belongs to another account.");
+      return;
+    }
+
+    if (pass.expiresAt && Date.now() >= pass.expiresAt) {
+      showValidation(false, "PASS EXPIRED",
+        "This demo pass has expired.");
+      return;
+    }
+
+    if (pass.type === "single" && pass.lastUsedAt) {
+      showValidation(false, "PASS ALREADY USED",
+        "Single Ride passes can only be used once.");
+      return;
+    }
+
+    if (pass.lastUsedAt) {
+      const remaining =
+        15 * 60 * 1000 - (Date.now() - pass.lastUsedAt);
+
+      if (remaining > 0) {
+        showValidation(false, "COOLDOWN ACTIVE",
+          "This pass was scanned recently.", remaining);
+        return;
+      }
+    }
+
+    const now = Date.now();
+
+    await updateDoc(ref, {
+      lastUsedAt: now,
+      ...(pass.type === "single" ? { status: "used" } : {})
+    });
+
+    await addDoc(collection(db, "transactions"), {
+      uid: currentUser.uid,
+      type: "validation",
+      description: "Demo pass accepted",
+      amount: 0,
+      createdAt: now
+    });
+
+    showValidation(true, "PASS ACCEPTED",
+      "Demo pass accepted. The 15-minute timer has started.");
+
+    await loadDashboard();
+    toast("Demo pass accepted.");
+  } catch (error) {
+    console.error(error);
+    showValidation(false, "Validation failed",
+      "Check your Firestore rules and internet connection.");
   }
-
-  pass.lastUsedAt = new Date().toISOString();
-
-  if (pass.type === "single") {
-    pass.status = "used";
-  }
-
-  addTransaction(state, "validation", "Demo pass accepted", 0);
-  saveDemoState(state);
-
-  showValidation(true, "PASS ACCEPTED",
-    "Demo pass accepted. The 15-minute anti-passback timer has started.");
-
-  toast("Demo pass accepted.");
-  await loadDashboard();
 }
 
 function friendlyError(error, fallback) {
@@ -532,6 +595,7 @@ function initFirebase() {
 
   app = initializeApp(firebaseConfig);
   auth = getAuth(app);
+  db = getFirestore(app);
 
   onAuthStateChanged(auth, async user => {
     currentUser = user;
