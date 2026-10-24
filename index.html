@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101c2d">
+  <title>Theta Transit — Demo</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#"><span class="brand-mark">T</span><span>Theta Transit<small>FARE & PASS DEMO</small></span></a>
+    <div class="top-actions">
+      <span id="auth-status" class="muted">Not signed in</span>
+      <button id="logout-button" class="button button-quiet hidden">Sign out</button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section id="auth-panel" class="auth-layout">
+      <div class="hero">
+        <div class="eyebrow">YOUR CITY. YOUR RIDE.</div>
+        <h1>Transit, made<br><span>simple.</span></h1>
+        <p>Buy demo passes with simulated credits, display your QR ticket, and test it at a virtual validator.</p>
+        <div class="hero-pills"><span>● $50 daily wallet</span><span>● 15-minute anti-passback</span></div>
+      </div>
+      <div class="panel auth-card">
+        <div class="tabs">
+          <button class="tab active" data-auth-mode="login">Sign in</button>
+          <button class="tab" data-auth-mode="signup">Create account</button>
+        </div>
+        <form id="auth-form">
+          <label for="email">Email address</label>
+          <input id="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" minlength="6" placeholder="At least 6 characters" required>
+          <button id="auth-submit" class="button button-primary full" type="submit">Sign in</button>
+          <p id="auth-message" class="message" role="status"></p>
+        </form>
+        <p class="fine-print">Demo only. No real money or real transit fare is involved.</p>
+      </div>
+    </section>
+
+    <section id="app-panel" class="hidden">
+      <div class="welcome-row">
+        <div><div class="eyebrow">PASSENGER DASHBOARD</div><h1>Good to see you.</h1><p class="muted">Your demo transit wallet and tickets in one place.</p></div>
+        <div class="date-chip"><span class="live-dot"></span><span id="eastern-date">Eastern Time</span></div>
+      </div>
+
+      <div class="dashboard-grid">
+        <section class="balance-card">
+          <div class="balance-top"><span>DAILY WALLET</span><span class="wallet-icon">＄</span></div>
+          <div class="balance-amount" id="balance">$50.00</div>
+          <div class="balance-caption">Demo credits · resets to $50 at midnight ET</div>
+          <div class="balance-rule"><span>Daily maximum</span><strong>$50.00</strong></div>
+          <div class="balance-rule"><span>Next reset</span><strong id="reset-countdown">—</strong></div>
+        </section>
+        <section class="panel quick-card">
+          <div class="section-kicker">QUICK ACTION</div>
+          <h2>Ready to ride?</h2>
+          <p class="muted">Choose a pass below, then open its QR ticket when you're ready to test a scan.</p>
+          <button class="button button-dark" id="scroll-passes">Browse passes <span>↗</span></button>
+        </section>
+      </div>
+
+      <section class="section-block" id="passes-section">
+        <div class="section-heading"><div><div class="section-kicker">FARE COLLECTION</div><h2>Available passes</h2></div><span class="muted small">Demo prices</span></div>
+        <div id="pass-catalog" class="pass-grid"></div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-heading"><div><div class="section-kicker">YOUR TICKETS</div><h2>My passes</h2></div><span id="pass-count" class="count-pill">0 passes</span></div>
+        <div id="my-passes" class="my-pass-list"></div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-heading"><div><div class="section-kicker">TEST EQUIPMENT</div><h2>QR validator</h2></div><span class="status-pill">SIMULATOR</span></div>
+        <div class="validator-layout">
+          <div class="panel validator-panel">
+            <div class="validator-head"><div class="scanner-icon">▦</div><div><h3>Scan a pass</h3><p class="muted">Use your device camera or enter a pass QR payload.</p></div></div>
+            <div id="qr-reader" class="qr-reader"></div>
+            <div class="validator-actions"><button id="start-scan" class="button button-primary">Start camera</button><button id="stop-scan" class="button button-outline" disabled>Stop camera</button></div>
+            <label for="manual-qr">Manual QR payload (for testing)</label>
+            <textarea id="manual-qr" rows="3" placeholder='{"passId":"..."}'></textarea>
+            <button id="manual-validate" class="button button-dark full">Validate payload</button>
+          </div>
+          <div class="panel result-panel">
+            <div class="section-kicker">LAST VALIDATION</div>
+            <div id="validation-icon" class="result-symbol">?</div>
+            <h3 id="validation-title">Waiting for a scan</h3>
+            <p id="validation-detail" class="muted">A validation result will appear here.</p>
+            <div id="cooldown-line" class="cooldown-line hidden"></div>
+            <div class="fine-print">This is a demo validator. Production-grade validation depends on trusted server-side Firebase functions and security rules.</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section-block">
+        <div class="section-heading"><div><div class="section-kicker">ACCOUNT ACTIVITY</div><h2>Recent transactions</h2></div></div>
+        <div id="transactions" class="transactions panel"></div>
+      </section>
+      <p id="app-message" class="message" role="status"></p>
+    </section>
+    <footer><span>THETA TRANSIT</span><span>Fictional transit system · Demo credits only</span></footer>
+  </main>
+
+  <dialog id="ticket-dialog" class="ticket-dialog">
+    <button id="close-ticket" class="dialog-close" aria-label="Close">×</button>
+    <div class="section-kicker">DIGITAL TICKET</div><h2 id="ticket-name">Your pass</h2>
+    <p id="ticket-description" class="muted"></p>
+    <div id="ticket-qr" class="ticket-qr"></div>
+    <div id="ticket-code" class="ticket-code"></div>
+    <div id="ticket-status" class="ticket-status">Active demo pass</div>
+    <p class="fine-print">Show this code to the Theta Transit demo validator. It is not a real transit ticket.</p>
+  </dialog>
+  <div id="toast" class="toast" role="status"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
